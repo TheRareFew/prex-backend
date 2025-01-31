@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.endpoints import api_router
+from app.api.endpoints import router
 from app.core.config import get_settings
 from pinecone import Pinecone
 import logging
@@ -30,7 +30,7 @@ app.add_middleware(
 )
 
 # Include our routers
-app.include_router(api_router, prefix="/api/v1")
+app.include_router(router, prefix="/api/v1")
 
 @app.get("/health")
 async def health_check():

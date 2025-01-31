@@ -175,4 +175,57 @@ async def escalate_ticket(reason: str) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Escalate error: {str(e)}")
+        raise
+
+@tool
+async def update_ticket_status(status: str, reason: str = "") -> Dict[str, Any]:
+    """Update the ticket status. Status should be either 'in_progress' or 'closed'."""
+    try:
+        if status not in ["in_progress", "closed"]:
+            raise ValueError("Status must be either 'in_progress' or 'closed'")
+            
+        return {
+            "action": "update_status",
+            "status": status,
+            "reason": reason,
+            "metadata": {
+                "status": status,
+                "updated_at": datetime.utcnow().isoformat()
+            }
+        }
+    except Exception as e:
+        logger.error(f"Update ticket status error: {str(e)}")
+        raise
+
+@tool
+async def add_ticket_note(note: str) -> Dict[str, Any]:
+    """Add a note to the ticket describing the nature of the issue or progress made."""
+    try:
+        return {
+            "action": "add_note",
+            "note": note,
+            "metadata": {
+                "created_at": datetime.utcnow().isoformat()
+            }
+        }
+    except Exception as e:
+        logger.error(f"Add note error: {str(e)}")
+        raise
+
+@tool
+async def update_ticket_name(name: str) -> Dict[str, Any]:
+    """Update the ticket name/title. Use this when first understanding user's issue."""
+    try:
+        # Truncate name if too long (matches schema)
+        name = name[:100] if len(name) > 100 else name
+        
+        return {
+            "action": "update_name",
+            "name": name,
+            "metadata": {
+                "updated_at": datetime.utcnow().isoformat()
+            }
+        }
+    except Exception as e:
+        logger.error(f"Update ticket name error: {str(e)}")
         raise 
