@@ -1,5 +1,5 @@
 import os
-from typing import Optional, List, Tuple
+from typing import Optional, List
 import aiofiles
 from langchain_openai import ChatOpenAI
 from langchain_community.embeddings import OpenAIEmbeddings
@@ -7,13 +7,20 @@ from langchain_community.vectorstores import Pinecone
 from langchain.schema import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import logging
-from PIL import Image
-import io
 import fitz  # PyMuPDF for PDF processing
 import base64
 from openai import AsyncOpenAI
 from datetime import datetime
-from app.models.message import Message
+from dataclasses import dataclass
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+@dataclass
+class Message:
+    """Simple message class for file handling."""
+    content: str
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +35,26 @@ llm = ChatOpenAI(model_name="gpt-4o-mini")
 # Initialize embeddings
 embeddings_1536 = OpenAIEmbeddings(model="text-embedding-ada-002")
 embeddings_3072 = OpenAIEmbeddings(model="text-embedding-3-large")
+
+async def process_text_content(content: str) -> List[str]:
+    """Split text content into chunks using RecursiveCharacterTextSplitter."""
+    try:
+        # Initialize text splitter with conservative settings
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,  # Smaller chunks for better context
+            chunk_overlap=100,  # Some overlap to maintain context
+            length_function=len,
+            separators=["\n\n", "\n", " ", ""]
+        )
+        
+        # Split text into chunks
+        chunks = text_splitter.split_text(content)
+        logger.info(f"Split text into {len(chunks)} chunks")
+        return chunks
+        
+    except Exception as e:
+        logger.error(f"Error splitting text into chunks: {str(e)}")
+        raise
 
 async def read_text_file(file_path: str) -> str:
     """Read content from a text file."""
@@ -52,22 +79,6 @@ async def read_pdf_file(file_path: str) -> str:
     except Exception as e:
         logger.error(f"Error reading PDF file: {str(e)}")
         raise
-
-
-async def generate_text_summary(content: str) -> str:
-    """Generate a single summary for the entire text content."""
-    try:
-        # Limit content length for the summary
-        max_content_length = 4000  # Adjust based on model's context window
-        truncated_content = content[:max_content_length] + ("..." if len(content) > max_content_length else "")
-        
-        prompt = f"Please provide a concise summary of the following text (max 200 words):\n\n{truncated_content}"
-        response = await llm.ainvoke(prompt)
-        return response.content
-    except Exception as e:
-        logger.error(f"Error generating text summary: {str(e)}")
-        return "Error generating summary"
-
 
 async def upload_to_pinecone_with_model(
     documents: List[Document],
@@ -96,11 +107,10 @@ async def process_file(
     uploaded_by: str,
     message: Optional[Message],
     created_at: datetime
-) -> Optional[Tuple[List[str], List[str]]]:
-    """Process a file and generate its description."""
+) -> Optional[List[str]]:
+    """Process a file and upload its chunks to Pinecone."""
     try:
         logger.info(f"Starting file processing for {filename} (type: {file_type})")
-        description = None
         raw_chunks = None
         
         # Process based on file type
@@ -110,8 +120,6 @@ async def process_file(
             
             # Get raw chunks for 3072d index
             raw_chunks = await process_text_content(content)
-            # Generate one summary for the entire document
-            description = await generate_text_summary(content)
             
             # Create documents for raw chunks (3072d)
             raw_documents = [
@@ -132,21 +140,7 @@ async def process_file(
                 for i, chunk in enumerate(raw_chunks)
             ]
             
-            # Create single document for description (3072d)
-            description_document = Document(
-                page_content=description,
-                metadata={
-                    'file_id': str(file_id),
-                    'filename': filename,
-                    'uploaded_by': uploaded_by,
-                    'file_type': file_type,
-                    'upload_date': str(created_at),
-                    'content_type': 'description',
-                    **({"message_text": message.content} if message else {})
-                }
-            )
-            
-            # Upload raw chunks and description to 3072d index in separate namespaces
+            # Upload raw chunks to 3072d index
             pinecone_index_3072 = os.getenv("PINECONE_INDEX")
             
             # Upload chunks to chunks namespace
@@ -157,23 +151,11 @@ async def process_file(
                 "chunks"
             )
             
-            # Upload description to descriptions namespace
-            await upload_to_pinecone_with_model(
-                [description_document],
-                embeddings_3072,
-                pinecone_index_3072,
-                "descriptions"
-            )
-            
-            
         else:
             logger.warning(f"Unsupported file type for processing: {file_type}")
             return None
-        
-        if not description:
-            logger.warning(f"No description generated for file {filename}")
             
-        return [description] if description else None, raw_chunks
+        return raw_chunks
     
     except Exception as e:
         logger.error(f"Error processing file {filename}: {str(e)}", exc_info=True)

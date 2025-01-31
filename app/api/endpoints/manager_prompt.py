@@ -16,7 +16,15 @@ from app.tools.support_tools import (
 from app.tools.manager_tools import (
     write_article,
     update_article_status,
-    add_article_note
+    add_article_note,
+    query_articles,
+    query_article_notes,
+    query_article_versions,
+    query_approval_requests,
+    query_article_tags,
+    query_manager_prompts,
+    query_manager_responses,
+    query_response_notes
 )
 
 router = APIRouter()
@@ -47,6 +55,7 @@ memory = ConversationSummaryMemory(
 # Setup LLM and agent
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
 
+# Define input variables explicitly
 prompt = ChatPromptTemplate.from_messages([
     ("system", """You are an AI manager assistant. Your role is to help managers make decisions and provide guidance.
     
@@ -57,18 +66,13 @@ prompt = ChatPromptTemplate.from_messages([
     4. Recording feature requests and feedback
     5. Searching existing knowledge base and information store
     
-    When writing articles:
-    - Format content in HTML (not markdown)
-    - Keep content professional and clear
-    - Structure content logically with proper headings and paragraphs
-    - Include relevant information from knowledge base if available
-    - Do not include the article text in the response
-    
-    Keep responses professional and focused on management best practices."""),
+    Keep responses professional and focused on management best practices.
+    Retreive an article's uuid if not known.
+ """),
     MessagesPlaceholder(variable_name="chat_history"),
     ("human", "{input}"),
     MessagesPlaceholder(variable_name="agent_scratchpad"),
-])
+]).partial()  # Make prompt partial to handle missing variables
 
 tools = [
     record_feature_request,
@@ -77,10 +81,18 @@ tools = [
     search_info_store,
     write_article,
     update_article_status,
-    add_article_note
+    add_article_note,
+    query_articles,
+    query_article_notes,
+    query_article_versions,
+    query_approval_requests,
+    query_article_tags,
+    query_manager_prompts,
+    query_manager_responses,
+    query_response_notes
 ]
 
-# Create agent with OpenAIFunctionsAgent
+# Create agent with OpenAIFunctionsAgent and explicit input variables
 agent = OpenAIFunctionsAgent(
     llm=llm,
     tools=tools,
@@ -91,7 +103,8 @@ agent_executor = AgentExecutor(
     agent=agent,
     tools=tools,
     verbose=True,
-    return_intermediate_steps=True
+    return_intermediate_steps=True,
+    handle_parsing_errors=True  # Add error handling
 )
 
 @router.post("/manager-prompt", response_model=ManagerPromptResponse)
@@ -120,18 +133,20 @@ async def handle_manager_prompt(request: ManagerPromptRequest):
             role = "assistant" if msg.is_system_message else "human"
             formatted_history.append((role, msg.message))
         
-        # Run agent with memory summary
+        # Run agent with only required variables
+        print(f"Debug - Running agent with input: {request.prompt}")
         result = await agent_executor.ainvoke({
             "input": request.prompt,
             "chat_history": formatted_history,
-            "memory_summary": memory_summary
+            "agent_scratchpad": ""  # Add empty scratchpad
         })
 
-        print(f"Debug - full result: {result}")
+        print(f"Debug - Full agent result: {result}")
+        print(f"Debug - Intermediate steps: {result.get('intermediate_steps', [])}")
 
         # Get raw response text
         response_text = str(result["output"])
-        print(f"Debug - raw response: {response_text}")
+        print(f"Debug - Raw response: {response_text}")
 
         # Get actions from intermediate steps
         actions = []
@@ -139,16 +154,25 @@ async def handle_manager_prompt(request: ManagerPromptRequest):
             for step in result["intermediate_steps"]:
                 if len(step) >= 2:  # Each step should have tool and output
                     tool_output = step[1]
+                    print(f"Debug - Tool output: {tool_output}")
+                    # Only include write/update/add actions, not queries
                     if isinstance(tool_output, dict) and "action" in tool_output:
-                        actions.append(tool_output)
-                        print(f"Debug - adding action: {tool_output}")
+                        action = tool_output["action"]
+                        if action in ["write_article", "update_article_status", "add_article_note", 
+                                    "record_feature_request", "record_feedback"]:
+                            actions.append(tool_output)
+                            print(f"Debug - Adding action: {tool_output}")
+                        else:
+                            print(f"Debug - Skipping query action: {action}")
         
-        print(f"Debug - final actions: {actions}")
+        print(f"Debug - Final actions: {actions}")
         
         return ManagerPromptResponse(
             response=response_text,
             actions=actions
         )
     except Exception as e:
-        print(f"Error in handle_manager_prompt: {str(e)}")
+        print(f"Debug - Error type: {type(e)}")
+        print(f"Debug - Full error: {str(e)}")
+        print(f"Debug - Error details: ", e.__dict__ if hasattr(e, '__dict__') else "No details")
         raise HTTPException(status_code=500, detail=str(e)) 
